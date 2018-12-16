@@ -9,7 +9,12 @@ use Target;
 use generate::{interrupt, peripheral};
 
 /// Whole device generation
-pub fn render(d: &Device, target: &Target, nightly: bool, device_x: &mut String) -> Result<Vec<Tokens>> {
+pub fn render(
+    d: &Device,
+    target: &Target,
+    nightly: bool,
+    device_x: &mut String,
+) -> Result<Vec<Tokens>> {
     let mut out = vec![];
 
     let doc = format!(
@@ -79,6 +84,8 @@ pub fn render(d: &Device, target: &Target, nightly: bool, device_x: &mut String)
     out.push(quote! {
         extern crate bare_metal;
         extern crate vcell;
+        #[cfg(feature = "klee-analysis")]
+        extern crate klee;
 
         use core::ops::Deref;
         use core::marker::PhantomData;
@@ -104,11 +111,12 @@ pub fn render(d: &Device, target: &Target, nightly: bool, device_x: &mut String)
 
     if fpu_present {
         core_peripherals = &[
-            "CBP", "CPUID", "DCB", "DWT", "FPB", "FPU", "ITM", "MPU", "NVIC", "SCB", "SYST", "TPIU"
+            "CBP", "CPUID", "DCB", "DWT", "FPB", "FPU", "ITM", "MPU", "NVIC", "SCB", "SYST",
+            "TPIU",
         ];
     } else {
         core_peripherals = &[
-            "CBP", "CPUID", "DCB", "DWT", "FPB", "ITM", "MPU", "NVIC", "SCB", "SYST", "TPIU"
+            "CBP", "CPUID", "DCB", "DWT", "FPB", "ITM", "MPU", "NVIC", "SCB", "SYST", "TPIU",
         ];
     }
 
@@ -136,7 +144,36 @@ pub fn render(d: &Device, target: &Target, nightly: bool, device_x: &mut String)
                 };
             });
         }
+        out.push(quote! {
+            #[cfg(feature = "klee-analysis")]
+            use klee::ksymbol;
+        });
     }
+
+    // klee staticts
+    let mut alloc = vec![];
+    for p in &d.peripherals {
+        let name = &*p.name;
+        alloc.push(quote! {
+            // pub static mut CBP: MaybeUninit<::peripheral::#name::RegisterBlock> = MaybeUninit::uninitialized();
+        });
+    }
+
+    // out.push(quote! {
+    //     #[cfg(feature = "klee-analysis")]
+    //     mod klee_statics {
+    //         use core::mem::MaybeUninit;
+    //         (#alloc)*
+    //     }
+    // });
+
+    out.push(quote! {
+         #[cfg(feature = "klee-analysis")]
+         mod klee_statics {
+    //         use core::mem::MaybeUninit;
+    //         (#alloc)*
+         }
+    });
 
     for p in &d.peripherals {
         if *target == Target::CortexM && core_peripherals.contains(&&*p.name.to_uppercase()) {
@@ -150,7 +187,8 @@ pub fn render(d: &Device, target: &Target, nightly: bool, device_x: &mut String)
             .as_ref()
             .map(|v| &v[..])
             .unwrap_or(&[])
-            .is_empty() && p.derived_from.is_none()
+            .is_empty()
+            && p.derived_from.is_none()
         {
             // No register block will be generated so don't put this peripheral
             // in the `Peripherals` struct
@@ -171,7 +209,8 @@ pub fn render(d: &Device, target: &Target, nightly: bool, device_x: &mut String)
         Target::Msp430 => Some(Ident::new("msp430")),
         Target::RISCV => Some(Ident::new("riscv")),
         Target::None => None,
-    }.map(|krate| {
+    }
+    .map(|krate| {
         quote! {
             /// Returns all the peripherals *once*
             #[inline]
