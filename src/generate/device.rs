@@ -3,7 +3,7 @@ use svd::Device;
 use syn::Ident;
 
 use errors::*;
-use util::{self, ToSanitizedUpperCase};
+use util::{self, ToSanitizedSnakeCase, ToSanitizedUpperCase};
 use Target;
 
 use generate::{interrupt, peripheral};
@@ -46,6 +46,7 @@ pub fn render(
         #![deny(warnings)]
         #![allow(non_camel_case_types)]
         #![no_std]
+        #![cfg_attr(feature = "klee-analysis", feature(maybe_uninit))]
     });
 
     if nightly {
@@ -153,26 +154,29 @@ pub fn render(
     // klee staticts
     let mut alloc = vec![];
     for p in &d.peripherals {
-        let name = &*p.name;
+        let name_pc = Ident::new(&*p.name.to_sanitized_upper_case());
+        let name_sc = Ident::new(&*p.name.to_sanitized_snake_case());
+
+        let (base, _derived) = if let Some(base) = p.derived_from.as_ref() {
+            // TODO Verify that base exists
+            // TODO We don't handle inheritance style `derivedFrom`, we should raise
+            // an error in that case
+            (Ident::new(&*base.to_sanitized_snake_case()), true)
+        } else {
+            (name_sc.clone(), false)
+        };
+
         alloc.push(quote! {
-            // pub static mut CBP: MaybeUninit<::peripheral::#name::RegisterBlock> = MaybeUninit::uninitialized();
+            pub static mut #name_pc: MaybeUninit<::#base::RegisterBlock> = MaybeUninit::uninitialized();
         });
     }
 
-    // out.push(quote! {
-    //     #[cfg(feature = "klee-analysis")]
-    //     mod klee_statics {
-    //         use core::mem::MaybeUninit;
-    //         (#alloc)*
-    //     }
-    // });
-
     out.push(quote! {
-         #[cfg(feature = "klee-analysis")]
-         mod klee_statics {
-    //         use core::mem::MaybeUninit;
-    //         (#alloc)*
-         }
+        #[cfg(feature = "klee-analysis")]
+        mod klee_statics {
+            use core::mem::MaybeUninit;
+            #(#alloc)*
+        }
     });
 
     for p in &d.peripherals {
